@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         GeoFS A350 Startup v3.14.0 Official
+// @name         GeoFS A350 Startup v3.15.0 Official
 // @namespace    Vicke55
-// @version      3.14.0
+// @version      3.15.0
 // @description  Airbus A350 Startup Panel for GeoFS
 // @match        https://*.geo-fs.com/geofs.php*
 // @grant        none
@@ -14,7 +14,7 @@
     // ASSETS AND SETTINGS
     // ============================================================
 
-    const VERSION = '3.14.0';
+    const VERSION = '3.15.0';
     const BASE = 'https://raw.githubusercontent.com/Vicke55/Airbus-startup-test/main/';
     const UPDATE_CONFIG_URL = BASE + 'updates/updates.json';
     const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
@@ -54,6 +54,16 @@
     const POST_FLIGHT_APU_DELAY = 8000;
     const LANDING_CHOICE_DELAY = 3000;
     const STARTUP_MODAL_RESET_DELAY = 5000;
+
+    const ADIRS_ALIGNMENT_DURATIONS = {
+        instant: 3000,
+        sim: 2 * 60 * 1000 + 30 * 1000
+    };
+    const ADIRS_REAL_EQUATOR_MS = 4.5 * 60 * 1000;
+    const ADIRS_REAL_POLAR_MS = 17 * 60 * 1000;
+    const ADIRS_REAL_POLAR_LATITUDE = 80;
+    const ADIRS_REAL_FALLBACK_MS = 10 * 60 * 1000;
+    const ADIRS_DISPLAY_INTERVAL = 250;
 
     const COMMON_IMAGES = [26, 27, 28, 29, 30, 31, 32, 33, 34, 35];
     const FLIGHT_IMAGES = [36, 35];
@@ -163,7 +173,14 @@
         engineTimers: [],
         engTransitionTimer: null,
         engTransitionToken: 0,
-        engTransitionPending: false
+        engTransitionPending: false,
+
+        adirsAlignmentMode: 'sim',
+        adirsAligned: false,
+        adirsAligning: false,
+        adirsAlignmentTimer: null,
+        adirsAlignmentEndTime: 0,
+        adirsAlignmentDuration: 0
     };
 
     let overheadWindow = null;
@@ -186,7 +203,8 @@
         lastRunVersion: 'a350Startup.lastRunVersion',
         pendingChangelogVersion: 'a350Startup.pendingChangelogVersion',
         seenUpdateVersion: 'a350Startup.seenUpdateVersion',
-        seenAnnouncements: 'a350Startup.seenAnnouncements'
+        seenAnnouncements: 'a350Startup.seenAnnouncements',
+        adirsAlignmentMode: 'a350Startup.adirsAlignmentMode'
     };
 
     function storageGet(key) {
@@ -199,6 +217,11 @@
 
     function storageRemove(key) {
         try { localStorage.removeItem(key); } catch (_) {}
+    }
+
+    const savedADIRSAlignmentMode = storageGet(STORAGE_KEYS.adirsAlignmentMode);
+    if (['instant', 'sim', 'real'].includes(savedADIRSAlignmentMode)) {
+        state.adirsAlignmentMode = savedADIRSAlignmentMode;
     }
 
     function initializeVersionNotification() {
@@ -283,8 +306,8 @@
             }
 
             const requests = [];
-            if (config.changelogUrl) requests.push(fetchJSON(config.changelogUrl).then(data => { notificationState.changelog = data; }).catch(error => console.warn('[A350 v3.14.0] Could not load changelog:', error)));
-            if (config.announcementsUrl) requests.push(fetchJSON(config.announcementsUrl).then(data => { notificationState.announcements = Array.isArray(data.announcements) ? data.announcements : []; }).catch(error => console.warn('[A350 v3.14.0] Could not load announcements:', error)));
+            if (config.changelogUrl) requests.push(fetchJSON(config.changelogUrl).then(data => { notificationState.changelog = data; }).catch(error => console.warn('[A350 v3.15.0] Could not load changelog:', error)));
+            if (config.announcementsUrl) requests.push(fetchJSON(config.announcementsUrl).then(data => { notificationState.announcements = Array.isArray(data.announcements) ? data.announcements : []; }).catch(error => console.warn('[A350 v3.15.0] Could not load announcements:', error)));
             await Promise.all(requests);
 
             const latestVersion = String(config.latestVersion || '').trim();
@@ -303,7 +326,7 @@
             if (notificationState.modalOpen) showNotificationModal();
         } catch (error) {
             // The addon remains fully usable if GitHub is unavailable.
-            console.warn('[A350 v3.14.0] Update check failed; continuing offline:', error);
+            console.warn('[A350 v3.15.0] Update check failed; continuing offline:', error);
             notificationState.checked = true;
             updateMenuNotificationState();
             if (notificationState.modalOpen) showNotificationModal();
@@ -438,11 +461,11 @@
             if (restart) sound.currentTime = 0;
             const result = sound.play();
             if (result && typeof result.catch === 'function') {
-                result.catch(error => console.warn('[A350 v3.14.0] Audio playback failed:', name, error));
+                result.catch(error => console.warn('[A350 v3.15.0] Audio playback failed:', name, error));
             }
             return true;
         } catch (error) {
-            console.warn('[A350 v3.14.0] Audio playback failed:', name, error);
+            console.warn('[A350 v3.15.0] Audio playback failed:', name, error);
             return false;
         }
     }
@@ -650,7 +673,7 @@
             state.postFlightAPUTimer = null;
             if (state.image !== 38) return;
             loadImage(39);
-            console.log('[A350 v3.14.0] Post-flight APU start delay finished — image 39 loaded.');
+            console.log('[A350 v3.15.0] Post-flight APU start delay finished — image 39 loaded.');
         }, POST_FLIGHT_APU_DELAY);
     }
 
@@ -738,7 +761,7 @@
         state.engPanelOpen = false;
         setEngPanelVisibility(false, 'LOCKED', true);
         restoreSidebarAfterENG();
-        console.log('[A350 v3.14.0] ENG image 95 display finished; ENG panel locked/closed and overhead image 42 left visible.');
+        console.log('[A350 v3.15.0] ENG image 95 display finished; ENG panel locked/closed and overhead image 42 left visible.');
     }
 
     function clearEngineTimers() {
@@ -1010,6 +1033,7 @@
         #a350-back:disabled { opacity:.35; cursor:default; }
         #a350-close { width:36px; height:36px; background:rgba(0,0,0,.75); border:1px solid #777; border-radius:4px; color:white; font-size:20px; cursor:pointer; pointer-events:auto; }
         #a350-warning { display:none; position:absolute; bottom:20px; left:50%; transform:translateX(-50%); padding:9px 14px; background:rgba(100,0,0,.9); border:1px solid #d33; border-radius:4px; color:#ffb0b0; font-size:12px; font-weight:bold; white-space:nowrap; pointer-events:none; }
+        #a350-adirs-indicator { display:none; position:absolute; bottom:62px; left:50%; transform:translateX(-50%); padding:7px 12px; background:rgba(20,0,0,.78); border:1px solid rgba(255,55,55,.75); border-radius:4px; color:#ff4545; font-size:12px; font-weight:bold; letter-spacing:.35px; white-space:nowrap; text-shadow:0 0 7px rgba(255,0,0,.45); pointer-events:none; z-index:5; }
         #a350-startup-menu-button { position:relative; z-index:1000000; white-space:nowrap; }
         #a350-startup-menu-button.a350-hidden-in-replay { display:none!important; }
         @keyframes a350StartupRedBlink { 0%,49% { background:#a00000!important; color:#fff!important; box-shadow:0 0 0 1px #ff5555,0 0 12px rgba(255,0,0,.8); } 50%,100% { background:#222!important; color:#fff!important; box-shadow:none; } }
@@ -1182,7 +1206,7 @@
 
         const applyLayout = () => applyCroppedImageLayout(doc, imageId, wrapperId, panelId, cropTop);
         image.onload = applyLayout;
-        image.onerror = () => console.error('[A350 v3.14.0] Could not load image:', src);
+        image.onerror = () => console.error('[A350 v3.15.0] Could not load image:', src);
 
         if (image.getAttribute('src') !== src) {
             image.src = src;
@@ -1293,7 +1317,7 @@
         showTab('before');
         setEngPanelVisibility(true, 'LOCKED OPEN', true);
         loadEngImage(89);
-        console.log('[A350 v3.14.0] ENG start panel automatically unlocked/opened at overhead image 28.');
+        console.log('[A350 v3.15.0] ENG start panel automatically unlocked/opened at overhead image 28.');
     }
 
     function finishEngineStart() {
@@ -1303,7 +1327,7 @@
         state.engPanelOpen = false;
         setEngPanelVisibility(false, 'LOCKED', true);
         restoreSidebarAfterENG();
-        console.log('[A350 v3.14.0] ENG start complete at image 93 (NORM); ENG panel automatically closed and locked.');
+        console.log('[A350 v3.15.0] ENG start complete at image 93 (NORM); ENG panel automatically closed and locked.');
     }
 
     function beginPostFlightShutdown() {
@@ -1320,7 +1344,7 @@
         showTab('before');
         setEngPanelVisibility(true, 'LOCKED OPEN', true);
         loadEngImage(93);
-        console.log('[A350 v3.14.0] Post-flight shutdown mode active at overhead image 40.');
+        console.log('[A350 v3.15.0] Post-flight shutdown mode active at overhead image 40.');
     }
 
     function finishPostFlightShutdown() {
@@ -1338,7 +1362,116 @@
         state.eng2ShutdownCommandSent = true;
         state.engPanelOpen = false;
         setEngPanelVisibility(false, 'LOCKED', true);
-        console.log('[A350 v3.14.0] ENG panel sequence completed; overhead image 42 remains available for ENG 2 shutdown.');
+        console.log('[A350 v3.15.0] ENG panel sequence completed; overhead image 42 remains available for ENG 2 shutdown.');
+    }
+
+    // ============================================================
+    // ADIRS ALIGNMENT
+    // ============================================================
+
+    function getGeoFSLatitude() {
+        const aircraft = getAircraft();
+        const candidates = [
+            aircraft && aircraft.llaLocation,
+            window.geofs && window.geofs.aircraft && window.geofs.aircraft.instance && window.geofs.aircraft.instance.llaLocation
+        ];
+        try {
+            if (window.geofs && typeof window.geofs.getPosition === 'function') {
+                candidates.push(window.geofs.getPosition());
+            }
+        } catch (error) {
+            console.warn('[A350 v3.15.0] Could not read GeoFS position for ADIRS REAL mode:', error);
+        }
+
+        for (const candidate of candidates) {
+            if (!candidate) continue;
+            let latitude = null;
+            if (Array.isArray(candidate) && candidate.length) {
+                latitude = Number(candidate[0]);
+            } else if (typeof candidate === 'object') {
+                const raw = candidate.latitude ?? candidate.lat ?? candidate[0];
+                if (raw !== undefined && raw !== null) latitude = Number(raw);
+            }
+            if (Number.isFinite(latitude) && Math.abs(latitude) <= 90) return latitude;
+        }
+        return null;
+    }
+
+    function getADIRSAlignmentDuration() {
+        if (state.adirsAlignmentMode === 'instant') return ADIRS_ALIGNMENT_DURATIONS.instant;
+        if (state.adirsAlignmentMode === 'sim') return ADIRS_ALIGNMENT_DURATIONS.sim;
+
+        const latitude = getGeoFSLatitude();
+        if (latitude === null) {
+            console.warn('[A350 v3.15.0] GeoFS latitude was not available; using the 10-minute REAL-mode fallback.');
+            return ADIRS_REAL_FALLBACK_MS;
+        }
+
+        // Approximation for the addon's REAL mode: 4.5 minutes at the equator,
+        // increasing linearly to 17 minutes at 80 degrees latitude and above.
+        const latitudeFactor = Math.min(Math.abs(latitude), ADIRS_REAL_POLAR_LATITUDE) / ADIRS_REAL_POLAR_LATITUDE;
+        return Math.round(ADIRS_REAL_EQUATOR_MS + (ADIRS_REAL_POLAR_MS - ADIRS_REAL_EQUATOR_MS) * latitudeFactor);
+    }
+
+    function formatADIRSTime(milliseconds) {
+        const totalSeconds = Math.max(0, Math.ceil(milliseconds / 1000));
+        const minutes = Math.floor(totalSeconds / 60);
+        const seconds = totalSeconds % 60;
+        return String(minutes).padStart(2, '0') + ':' + String(seconds).padStart(2, '0');
+    }
+
+    function updateADIRSIndicator() {
+        const remaining = Math.max(0, state.adirsAlignmentEndTime - Date.now());
+        getDocuments().forEach(doc => {
+            const indicator = doc.getElementById('a350-adirs-indicator');
+            if (!indicator) return;
+            indicator.textContent = 'ADIRS IS ALIGNING  —  ' + formatADIRSTime(remaining);
+            indicator.style.display = state.adirsAligning ? 'block' : 'none';
+        });
+
+        if (state.adirsAligning && remaining <= 0) {
+            finishADIRSAlignment();
+        }
+    }
+
+    function clearADIRSAlignment(resetAligned = false) {
+        if (state.adirsAlignmentTimer !== null) {
+            clearInterval(state.adirsAlignmentTimer);
+            state.adirsAlignmentTimer = null;
+        }
+        state.adirsAligning = false;
+        state.adirsAlignmentEndTime = 0;
+        state.adirsAlignmentDuration = 0;
+        if (resetAligned) state.adirsAligned = false;
+        getDocuments().forEach(doc => {
+            const indicator = doc.getElementById('a350-adirs-indicator');
+            if (indicator) indicator.style.display = 'none';
+        });
+    }
+
+    function finishADIRSAlignment() {
+        if (!state.adirsAligning) return;
+        clearADIRSAlignment(false);
+        state.adirsAligned = true;
+        console.log('[A350 v3.15.0] ADIRS alignment complete.');
+    }
+
+    function startADIRSAlignment(triggerImage) {
+        if (state.adirsAligned || state.adirsAligning) return;
+        clearADIRSAlignment(false);
+        state.adirsAligning = true;
+        state.adirsAlignmentDuration = getADIRSAlignmentDuration();
+        state.adirsAlignmentEndTime = Date.now() + state.adirsAlignmentDuration;
+        updateADIRSIndicator();
+        state.adirsAlignmentTimer = setInterval(updateADIRSIndicator, ADIRS_DISPLAY_INTERVAL);
+        console.log('[A350 v3.15.0] ADIRS alignment started at image ' + triggerImage + ' (' + state.adirsAlignmentMode.toUpperCase() + ', ' + formatADIRSTime(state.adirsAlignmentDuration) + ').');
+    }
+
+    function updateADIRSSettingsUI() {
+        getDocuments().forEach(doc => {
+            const select = doc.getElementById('a350-adirs-mode');
+            if (select) select.value = state.adirsAlignmentMode;
+        });
     }
 
     function loadImage(number) {
@@ -1358,6 +1491,11 @@
         updateSequenceCursor(previousImage, newImage);
         state.image = newImage;
         syncImageNumber();
+
+        // Image 17 is the APU-start path's ADIRS 3 -> NAV step; image 67 is the EXT path's equivalent.
+        if ((newImage === 17 && state.startChoice === 'apu') || (newImage === 67 && state.startChoice === 'ext')) {
+            startADIRSAlignment(newImage);
+        }
 
         // Engine start is a locked, automatic ENG-panel sequence at overhead image 28.
         if (state.image === 28 && !state.engNormReached && !state.postFlightShutdownActive && !state.engineStartPanelComplete) {
@@ -1435,7 +1573,7 @@
             if (!image || !frame) return;
 
             image.onload = () => applyENGImageLayout(doc);
-            image.onerror = () => console.error('[A350 v3.14.0] Could not load ENG image:', state.engImage);
+            image.onerror = () => console.error('[A350 v3.15.0] Could not load ENG image:', state.engImage);
             if (image.getAttribute('src') !== src) image.src = src;
             else if (image.complete && image.naturalWidth) applyENGImageLayout(doc);
         });
@@ -1596,7 +1734,7 @@
         refreshChecklist();
         loadImage(25);
         state.sequenceIndex = 0;
-        console.log('[A350 v3.14.0] Short turnaround selected; repeating cycle from image 25.');
+        console.log('[A350 v3.15.0] Short turnaround selected; repeating cycle from image 25.');
     }
 
     function chooseFullShutdown() {
@@ -1622,10 +1760,11 @@
         refreshChecklist();
         updateEXTUI();
         loadImage(25);
-        console.log('[A350 v3.14.0] Full shutdown selected; EXT reset to DISCONNECTED and sequence locked at image 25.');
+        console.log('[A350 v3.15.0] Full shutdown selected; EXT reset to DISCONNECTED and sequence locked at image 25.');
     }
 
     function completeFullShutdownEXTReset() {
+        clearADIRSAlignment(true);
         clearLandingChoiceTimer();
         clearPostFlightAPUTimer();
         clearAPUTimer();
@@ -1681,7 +1820,7 @@
         hideTurnaroundChoice();
         setModalDisplay('a350-startup-modal', 'none');
         scheduleStartupChoiceAfterReset();
-        console.log('[A350 v3.14.0] EXT supply disconnected after full shutdown. Returned to image 1; startup choice will appear after 5 seconds.');
+        console.log('[A350 v3.15.0] EXT supply disconnected after full shutdown. Returned to image 1; startup choice will appear after 5 seconds.');
     }
 
     // ============================================================
@@ -1794,15 +1933,15 @@
             if (runToken !== state.apuRunToken) return;
             state.apuTimer = null;
             if (state.startChoice !== 'apu' || !state.apuStarted || state.image !== 9) {
-                console.warn('[A350 v3.14.0] APU timer cancelled or sequence changed.');
+                console.warn('[A350 v3.15.0] APU timer cancelled or sequence changed.');
                 return;
             }
             state.apuAvailable = true;
             loadImage(10);
-            console.log('[A350 v3.14.0] APU AVAIL — image 10 loaded automatically.');
+            console.log('[A350 v3.15.0] APU AVAIL — image 10 loaded automatically.');
         }, APU_READY_DELAY);
         startAPUSounds();
-        console.log('[A350 v3.14.0] APU startup started from image 8.');
+        console.log('[A350 v3.15.0] APU startup started from image 8.');
     }
 
     // ============================================================
@@ -1817,7 +1956,7 @@
             state.extApuStartTimer = null;
             if (state.startChoice !== 'ext' || state.image !== 77) return;
             loadImage(78);
-            console.log('[A350 v3.14.0] EXT APU start delay finished — image 78 loaded.');
+            console.log('[A350 v3.15.0] EXT APU start delay finished — image 78 loaded.');
         }, EXT_APU_START_DELAY);
     }
 
@@ -2098,7 +2237,7 @@
         }
         const aircraft = getAircraft();
         if (!aircraft) {
-            console.warn('[A350 v3.14.0] Aircraft not available.');
+            console.warn('[A350 v3.15.0] Aircraft not available.');
             showWarning('GeoFS aircraft is not available.');
             return false;
         }
@@ -2107,22 +2246,22 @@
             state.eng1Started = false;
             state.eng1Starting = true;
             aircraft.startEngines(0);
-            console.log('[A350 v3.14.0] ENGINE 1 START COMMAND SENT.');
+            console.log('[A350 v3.15.0] ENGINE 1 START COMMAND SENT.');
             waitForEngineStart(1, () => {
                 state.eng1Starting = false;
                 state.eng1Started = true;
-                console.log('[A350 v3.14.0] ENGINE 1 START SEQUENCE COMPLETE (stable status confirmed).');
+                console.log('[A350 v3.15.0] ENGINE 1 START SEQUENCE COMPLETE (stable status confirmed).');
             }, () => {
                 state.eng1Starting = false;
                 state.eng1Started = false;
-                console.warn('[A350 v3.14.0] ENGINE 1 START NOT CONFIRMED before timeout.');
+                console.warn('[A350 v3.15.0] ENGINE 1 START NOT CONFIRMED before timeout.');
                 showWarning('ENG 1 did not reach a stable running state. Check the engine and try again.');
             });
             return true;
         } catch (error) {
             state.eng1Starting = false;
             state.eng1Started = false;
-            console.error('[A350 v3.14.0] ENGINE 1 START ERROR:', error);
+            console.error('[A350 v3.15.0] ENGINE 1 START ERROR:', error);
             showWarning('Could not start engine 1.');
             return false;
         }
@@ -2135,7 +2274,7 @@
         }
         const aircraft = getAircraft();
         if (!aircraft) {
-            console.warn('[A350 v3.14.0] Aircraft not available.');
+            console.warn('[A350 v3.15.0] Aircraft not available.');
             showWarning('GeoFS aircraft is not available.');
             return false;
         }
@@ -2144,22 +2283,22 @@
             state.eng2Started = false;
             state.eng2Starting = true;
             aircraft.startEngines(1);
-            console.log('[A350 v3.14.0] ENGINE 2 START COMMAND SENT.');
+            console.log('[A350 v3.15.0] ENGINE 2 START COMMAND SENT.');
             waitForEngineStart(2, () => {
                 state.eng2Starting = false;
                 state.eng2Started = true;
-                console.log('[A350 v3.14.0] ENGINE 2 START SEQUENCE COMPLETE (stable status confirmed).');
+                console.log('[A350 v3.15.0] ENGINE 2 START SEQUENCE COMPLETE (stable status confirmed).');
             }, () => {
                 state.eng2Starting = false;
                 state.eng2Started = false;
-                console.warn('[A350 v3.14.0] ENGINE 2 START NOT CONFIRMED before timeout.');
+                console.warn('[A350 v3.15.0] ENGINE 2 START NOT CONFIRMED before timeout.');
                 showWarning('ENG 2 did not reach a stable running state. Check the engine and try again.');
             });
             return true;
         } catch (error) {
             state.eng2Starting = false;
             state.eng2Started = false;
-            console.error('[A350 v3.14.0] ENGINE 2 START ERROR:', error);
+            console.error('[A350 v3.15.0] ENGINE 2 START ERROR:', error);
             showWarning('Could not start engine 2.');
             return false;
         }
@@ -2195,12 +2334,12 @@
                 state.eng2Stopping = false;
             }
 
-            console.log(`[A350 v3.14.0] ENGINE ${engineNumber} STOP COMMAND SENT.`);
+            console.log(`[A350 v3.15.0] ENGINE ${engineNumber} STOP COMMAND SENT.`);
             return true;
         } catch (error) {
             if (engineNumber === 1) state.eng1Stopping = false;
             else state.eng2Stopping = false;
-            console.error(`[A350 v3.14.0] ENGINE ${engineNumber} STOP ERROR:`, error);
+            console.error(`[A350 v3.15.0] ENGINE ${engineNumber} STOP ERROR:`, error);
             showWarning(`Could not shut down engine ${engineNumber}.`);
             return false;
         }
@@ -2300,6 +2439,7 @@
     // ============================================================
 
     function applyColdAndDark() {
+        clearADIRSAlignment(true);
         stopAllAudio();
         clearAPUTimer();
         clearEXTAPUStartTimer();
@@ -2479,7 +2619,7 @@
         try {
             popup = window.open('', 'A350_OVERHEAD', 'popup=yes,width=1400,height=900,resizable=yes,scrollbars=no');
         } catch (error) {
-            console.error('[A350 v3.14.0] Could not open overhead window:', error);
+            console.error('[A350 v3.15.0] Could not open overhead window:', error);
             showWarning('Could not open the overhead window.');
             return;
         }
@@ -2526,6 +2666,8 @@
             applyTabToDocument(popup.document, state.currentTab);
             updateEXTUI();
             updateSoundUI();
+            updateADIRSSettingsUI();
+            updateADIRSIndicator();
             syncSidebarUI();
             syncModalDisplays();
             setEngPanelVisibility(state.engPanelOpen,
@@ -2558,7 +2700,7 @@
                 schedulePanelLayoutRefresh();
             }, 50);
         } catch (error) {
-            console.error('[A350 v3.14.0] Failed to create overhead window:', error);
+            console.error('[A350 v3.15.0] Failed to create overhead window:', error);
             try { popup.close(); } catch (_) {}
             overheadWindow = null;
             showWarning('Failed to create the overhead window.');
@@ -2608,6 +2750,19 @@
             updateSoundUI();
         });
 
+        const adirsMode = doc.getElementById('a350-adirs-mode');
+        if (adirsMode) {
+            adirsMode.value = state.adirsAlignmentMode;
+            adirsMode.addEventListener('change', () => {
+                const selected = adirsMode.value;
+                if (!['instant', 'sim', 'real'].includes(selected)) return;
+                state.adirsAlignmentMode = selected;
+                storageSet(STORAGE_KEYS.adirsAlignmentMode, selected);
+                updateADIRSSettingsUI();
+                playClick();
+            });
+        }
+
         const coldDark = doc.getElementById('a350-cold-dark-reset');
         if (coldDark) coldDark.addEventListener('click', () => { playClick(); applyColdAndDark(); });
         const engToggle = doc.getElementById('a350-eng-toggle');
@@ -2645,7 +2800,7 @@
         left.innerHTML = `
             <div id="a350-left-header">
                 <div id="a350-title">A350 STARTUP</div>
-                <div id="a350-version">v3.14.0 Official</div>
+                <div id="a350-version">v3.15.0 Official</div>
                 <button id="a350-overhead-button" type="button">OPEN A350 OVERHEAD</button>
             </div>
             <div id="a350-tabs">
@@ -2668,6 +2823,7 @@
             <div id="a350-settings">
                 <div class="a350-section-title">SETTINGS</div>
                 <div class="a350-setting"><label><input id="a350-sound-toggle" type="checkbox" checked> Sound effects</label></div>
+                <div class="a350-setting"><label for="a350-adirs-mode">ADIRS alignment time</label><select id="a350-adirs-mode" class="a350-ground-button"><option value="sim">SIM — 2:30 (default)</option><option value="instant">INSTANT — 0:03</option><option value="real">REAL — latitude-based</option></select></div>
                 <div class="a350-setting"><button id="a350-cold-dark-reset" class="a350-ground-button">APPLY COLD & DARK</button></div>
             </div>`;
 
@@ -2703,6 +2859,10 @@
         const warning = document.createElement('div');
         warning.id = 'a350-warning';
         panelArea.appendChild(warning);
+        const adirsIndicator = document.createElement('div');
+        adirsIndicator.id = 'a350-adirs-indicator';
+        adirsIndicator.setAttribute('aria-live', 'polite');
+        panelArea.appendChild(adirsIndicator);
         windowElement.append(left, panelArea);
         const sidebarToggle = document.createElement('button');
         sidebarToggle.id = 'a350-sidebar-toggle';
@@ -2756,6 +2916,8 @@
         bindPanelEvents(document);
         renderChecklist(document);
         updateEXTUI();
+        updateADIRSSettingsUI();
+        updateADIRSIndicator();
         syncSidebarUI();
         loadImage(1);
         loadEngImage(89);
@@ -2775,6 +2937,7 @@
             state.landingChoicePending = false;
             clearLandingChoiceTimer();
             hideTurnaroundChoice();
+            clearADIRSAlignment(true);
             state.checklistMode = 'startup';
             state.shortTurnaroundActive = false;
             state.fullShutdownActive = false;
@@ -2855,14 +3018,14 @@
         if (state.engPanelOpen) loadEngImage(state.engImage);
         updateEXTUI();
         updateSoundUI();
-        console.log('[A350 v3.14.0] Panel opened.');
+        console.log('[A350 v3.15.0] Panel opened.');
     }
 
     function closePanel() {
         const overlay = document.getElementById('a350-startup-overlay');
         if (overlay) overlay.style.display = 'none';
         state.open = false;
-        console.log('[A350 v3.14.0] Panel closed.');
+        console.log('[A350 v3.15.0] Panel closed.');
     }
 
     function togglePanel() { if (state.open) closePanel(); else openPanel(); }
@@ -2986,6 +3149,8 @@
         connectEXT,
         disconnectEXT,
         coldDark: applyColdAndDark,
+        startADIRSAlignment,
+        resetADIRSAlignment: () => clearADIRSAlignment(true),
         resetChecklist,
         startEngine1,
         startEngine2
@@ -3000,5 +3165,5 @@
     setInterval(updateMenuButtonVisibility, 400);
     checkForUpdates();
     setInterval(checkForUpdates, UPDATE_CHECK_INTERVAL);
-    console.log('[A350 v3.14.0] GeoFS A350 Startup v3.14.0 Official ready.');
+    console.log('[A350 v3.15.0] GeoFS A350 Startup v3.15.0 Official ready.');
 })();
