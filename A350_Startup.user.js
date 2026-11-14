@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         GeoFS A350 Startup v3.15.0 Official
+// @name         GeoFS A350 Startup v3.14.1 Official
 // @namespace    Vicke55
-// @version      3.15.0
+// @version      3.14.1
 // @description  Airbus A350 Startup Panel for GeoFS
 // @match        https://*.geo-fs.com/geofs.php*
 // @grant        none
@@ -14,7 +14,7 @@
     // ASSETS AND SETTINGS
     // ============================================================
 
-    const VERSION = '3.15.0';
+    const VERSION = '3.14.1';
     const BASE = 'https://raw.githubusercontent.com/Vicke55/Airbus-startup-test/main/';
     const UPDATE_CONFIG_URL = BASE + 'updates/updates.json';
     const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000;
